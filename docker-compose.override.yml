@@ -1,0 +1,8 @@
+version: "3.8"
+
+services:
+  q-utils:
+    volumes:
+      - .:/app                
+    # 로컬 소스를 컨테이너 /app에 실시간 반영
+    command: uvicorn web.app:app --host 0.0.0.0 --port 8000 --reload

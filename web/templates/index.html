@@ -4,66 +4,40 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HTML & URL to PDF</title>
+    <link rel="stylesheet" href="/static/style.css" />
   </head>
   <body>
-    <h1>HTML & URL to PDF 변환</h1>
-
-    <h2>HTML 입력</h2>
-    <form id="htmlForm">
-      <textarea
-        id="htmlInput"
-        rows="10"
-        cols="50"
-        placeholder="HTML 입력"
-      ></textarea
-      ><br />
-      <button type="button" onclick="convertHTML()">PDF 변환</button>
-    </form>
-
-    <h2>URL 입력</h2>
-    <form id="urlForm">
-      <input type="text" id="urlInput" placeholder="URL 입력" />
-      <button type="button" onclick="convertURL()">PDF 변환</button>
-    </form>
-
-    <script>
-      function convertHTML() {
-        const htmlContent = document.getElementById("htmlInput").value;
-        fetch("/convert", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ html: htmlContent }),
-        })
-          .then((response) => response.blob())
-          .then((blob) => {
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = "output.pdf";
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-          });
-      }
-
-      function convertURL() {
-        const urlInput = document.getElementById("urlInput").value;
-        fetch("/convert_url", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: urlInput }),
-        })
-          .then((response) => response.blob())
-          .then((blob) => {
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = "webpage.pdf";
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-          });
-      }
-    </script>
+	<div class="background"></div>
+  
+	<!-- 섹션 1: HTML 입력 + 미리보기 -->
+	<section class="section">
+		<div class="panel">
+			<div class="row">
+				<div class="title">HTML 입력</div>
+				<form id="htmlForm">
+					<textarea id="htmlInput" placeholder="여기에 HTML 입력"></textarea>
+					<br />
+					<button type="button" onclick="convertHTML()">PDF 변환</button>
+				</form>
+			</div>
+			<div class="row">
+			<div class="title">미리보기</div>
+			<iframe id="previewFrame"></iframe>
+			</div>
+	  	</div>
+		<div class="panel">
+		<div class="row">
+			<div class="title">URL 입력</div>
+			<form id="urlForm">
+				<input type="text" id="urlInput" placeholder="URL 입력" />
+				<button type="button" onclick="convertURL()">PDF 변환</button>
+			</form>
+		</div>
+	  </div>
+	</div>
+  
+	<script src="/static/script.js"></script>
   </body>
+  
+  
 </html>
