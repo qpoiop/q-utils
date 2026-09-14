@@ -152,6 +152,29 @@ def test_progress_callback_exception_is_swallowed():
     proc._progress_hook({"status": "downloading"})
 
 
+def test_build_match_conditions():
+    from api.media_ingest import build_match_conditions
+
+    conds = build_match_conditions(
+        {"max_duration": 600, "min_duration": 30, "exclude_title": "무한반복|loop"}
+    )
+    assert "duration >= 30" in conds
+    assert "duration <= 600" in conds
+    assert any(c.startswith("title !~=") and "무한반복|loop" in c for c in conds)
+    # 아무 옵션 없으면 빈 목록
+    assert build_match_conditions({}) == []
+
+
+def test_max_duration_builds_match_filter(tmp_path):
+    """max_duration 설정 시 yt-dlp match_filter(callable)가 구성돼야 한다."""
+    proc = VideoProcessor()
+    req = MediaRequest(
+        url="x", output_dir=str(tmp_path), options={"max_duration": 600, "min_duration": 60}
+    )
+    opts = proc._compose_options(req)
+    assert callable(opts.get("match_filter"))
+
+
 def test_policy_options_threaded(tmp_path):
     """쿠키/지연 옵션이 yt-dlp 옵션으로 통과되는지."""
     proc = VideoProcessor()

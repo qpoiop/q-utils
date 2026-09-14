@@ -21,6 +21,10 @@ class MediaProcessingError(RuntimeError):
     """미디어 처리 실패(다운로드/변환 등)를 나타내는 예외."""
 
 
+class MediaSkipped(Exception):
+    """필터 조건(예: 길이 초과)으로 항목을 건너뛴 경우."""
+
+
 def _import_yt_dlp():
     """yt-dlp를 지연 임포트한다.
 
@@ -49,6 +53,22 @@ def normalize_cookies_from_browser(value: Any) -> Optional[tuple]:
     if isinstance(value, (tuple, list)):
         return tuple(value)
     raise MediaProcessingError(f"잘못된 cookies_from_browser 값: {value!r}")
+
+
+def build_match_conditions(options: dict[str, Any]) -> list[str]:
+    """옵션에서 yt-dlp match_filter 조건 문자열 목록을 구성(순수 함수).
+
+    - min_duration / max_duration (초)
+    - exclude_title: 제목이 이 정규식에 매칭되면 제외 (대소문자 무시)
+    """
+    conditions: list[str] = []
+    if options.get("min_duration") is not None:
+        conditions.append(f"duration >= {int(options['min_duration'])}")
+    if options.get("max_duration") is not None:
+        conditions.append(f"duration <= {int(options['max_duration'])}")
+    if options.get("exclude_title"):
+        conditions.append(f"title !~= (?i)({options['exclude_title']})")
+    return conditions
 
 
 @dataclass
@@ -219,6 +239,16 @@ class BaseMediaHandler(ABC):
             opts["sleep_interval"] = request.options["sleep_interval"]
         if request.options.get("max_sleep_interval") is not None:
             opts["max_sleep_interval"] = request.options["max_sleep_interval"]
+        # 다운로드 아카이브: 이미 받은 항목 ID를 기록해 다음 실행 때 재다운로드 방지
+        if request.options.get("download_archive"):
+            opts["download_archive"] = request.options["download_archive"]
+
+        # 다운로드 전 필터(길이/제목)로 항목을 건너뛴다
+        conditions = build_match_conditions(request.options)
+        if conditions:
+            from yt_dlp.utils import match_filter_func
+
+            opts["match_filter"] = match_filter_func(" & ".join(conditions))
         return opts
 
     def _compose_options(self, request: MediaRequest) -> dict[str, Any]:
@@ -265,7 +295,15 @@ class BaseMediaHandler(ABC):
             try:
                 with yt_dlp.YoutubeDL(options) as ydl:
                     info = ydl.extract_info(request.url, download=True)
-                    return self._build_result(request, ydl, info)
+                    # match_filter로 걸러지면 다운로드가 일어나지 않는다.
+                    #  - 일부 버전은 info=None, 일부는 메타데이터만 반환하고 파일은 미생성.
+                    #  → 실제 결과 파일 존재 여부로 '건너뜀'을 판정한다.
+                    if info is None or not info.get("requested_downloads"):
+                        raise MediaSkipped(f"다운로드 생략(필터 또는 이미 받음): {request.url}")
+                    result = self._build_result(request, ydl, info)
+                    if not os.path.exists(result.output_path):
+                        raise MediaSkipped(f"다운로드 생략(필터 또는 이미 받음): {request.url}")
+                    return result
             except yt_dlp.utils.DownloadError as exc:
                 last_error = exc
                 self.logger.warning(

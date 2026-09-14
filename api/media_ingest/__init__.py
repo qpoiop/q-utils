@@ -4,9 +4,11 @@ from .audio import AudioProcessor
 from .base import (
     BaseMediaHandler,
     HANDLER_REGISTRY,
+    build_match_conditions,
     MediaProcessingError,
     MediaRequest,
     MediaResult,
+    MediaSkipped,
     normalize_cookies_from_browser,
     register_handler,
 )
@@ -37,9 +39,11 @@ __all__ = [
     "VideoProcessor",
     "BaseMediaHandler",
     "HANDLER_REGISTRY",
+    "build_match_conditions",
     "MediaProcessingError",
     "MediaRequest",
     "MediaResult",
+    "MediaSkipped",
     "normalize_cookies_from_browser",
     "register_handler",
     "MediaIngestPipeline",

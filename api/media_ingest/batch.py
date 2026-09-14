@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from .base import MediaProcessingError, MediaRequest
+from .base import MediaProcessingError, MediaRequest, MediaSkipped
 from .feeds import FeedCrawlerFactory
 from .pipeline import MediaIngestPipeline, build_default_pipeline
 
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BatchItemResult:
     url: str
-    status: str  # "ok" | "failed"
+    status: str  # "ok" | "failed" | "skipped"
     result: Optional[dict[str, Any]] = None
     error: Optional[str] = None
 
@@ -37,6 +37,7 @@ class BatchResult:
     total: int
     succeeded: int
     failed: int
+    skipped: int = 0
     items: list[BatchItemResult] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -46,6 +47,7 @@ class BatchResult:
             "total": self.total,
             "succeeded": self.succeeded,
             "failed": self.failed,
+            "skipped": self.skipped,
             "items": [item.__dict__ for item in self.items],
         }
 
@@ -66,6 +68,11 @@ class BatchIngestor:
         backoff_max: float = 30.0,
         sleep_interval: Optional[float] = 3,
         max_sleep_interval: Optional[float] = 7,
+        max_duration: Optional[int] = None,
+        min_duration: Optional[int] = None,
+        exclude_title: Optional[str] = None,
+        archive: Optional[str] = None,
+        overfetch: int = 5,
         logger_: Optional[logging.Logger] = None,
     ) -> None:
         self.pipeline = pipeline or build_default_pipeline()
@@ -79,6 +86,15 @@ class BatchIngestor:
         # yt-dlp 자체의 요청 간 sleep(다운로드 레벨)도 함께 적용
         self.sleep_interval = sleep_interval
         self.max_sleep_interval = max_sleep_interval
+        # 길이 필터(초): 너무 긴 무한반복/롱믹스 등을 건너뛰기 위함
+        self.max_duration = max_duration
+        self.min_duration = min_duration
+        # 제목 정규식 제외 필터(예: "무한반복|loop|[0-9]+시간")
+        self.exclude_title = exclude_title
+        # 다운로드 아카이브 파일 경로(있으면 이미 받은 항목은 다음 실행 때 건너뜀)
+        self.archive = archive
+        # 목표(limit) 달성을 위해 후보를 몇 배로 넉넉히 수집할지
+        self.overfetch = max(1, overfetch)
         self.logger = logger_ or logger
 
     def _random_delay(self) -> None:
@@ -95,10 +111,18 @@ class BatchIngestor:
             opts["sleep_interval"] = self.sleep_interval
         if self.max_sleep_interval is not None:
             opts["max_sleep_interval"] = self.max_sleep_interval
+        if self.max_duration is not None:
+            opts["max_duration"] = self.max_duration
+        if self.min_duration is not None:
+            opts["min_duration"] = self.min_duration
+        if self.exclude_title:
+            opts["exclude_title"] = self.exclude_title
+        if self.archive:
+            opts["download_archive"] = self.archive
         return opts
 
     def _process_one(self, url: str, output_dir: str) -> dict[str, Any]:
-        """단일 URL을 지수 백오프로 재시도하며 처리."""
+        """단일 URL을 지수 백오프로 재시도하며 처리. (MediaSkipped는 재시도 없이 전파)"""
         last_error: Optional[Exception] = None
         for attempt in range(1, self.item_retries + 1):
             try:
@@ -116,30 +140,51 @@ class BatchIngestor:
         raise MediaProcessingError(f"'{url}' 처리 실패: {last_error}")
 
     def ingest(self, identifier: str, output_dir: str, limit: Optional[int] = None) -> BatchResult:
-        """식별자로부터 피드를 수집하고 각 URL을 순차 처리."""
+        """식별자로부터 피드를 수집하고 URL을 처리한다.
+
+        limit이 주어지면 그 수만큼 **성공(다운로드)** 할 때까지 처리한다. 필터/중복으로
+        건너뛴 항목은 목표에 포함되지 않으므로, 후보를 넉넉히(overfetch) 수집해 백필한다.
+        """
         adapter = FeedCrawlerFactory.for_identifier(
             identifier, cookies_from_browser=self.cookies_from_browser
         )
-        urls = adapter.crawl(identifier, limit=limit)
+        # 목표(limit)보다 많이 수집해두고, 성공 개수가 채워지면 멈춘다.
+        candidate_cap = limit * self.overfetch if limit else None
+        urls = adapter.crawl(identifier, limit=candidate_cap)
 
         items: list[BatchItemResult] = []
-        for idx, url in enumerate(urls):
-            if idx > 0:
+        succeeded = 0
+        for url in urls:
+            if limit and succeeded >= limit:
+                break
+            if items:  # 첫 시도 제외, 항목 사이 지연
                 self._random_delay()
             try:
                 data = self._process_one(url, output_dir)
                 items.append(BatchItemResult(url=url, status="ok", result=data))
+                succeeded += 1
+            except MediaSkipped as exc:
+                self.logger.info("건너뜀: %s (%s)", url, exc)
+                items.append(BatchItemResult(url=url, status="skipped", error=str(exc)))
             except Exception as exc:  # noqa: BLE001 - 개별 실패는 배치를 중단시키지 않음
                 self.logger.error("최종 실패: %s (%s)", url, exc)
                 items.append(BatchItemResult(url=url, status="failed", error=str(exc)))
 
-        succeeded = sum(1 for i in items if i.status == "ok")
+        skipped = sum(1 for i in items if i.status == "skipped")
+        failed = sum(1 for i in items if i.status == "failed")
+        if limit and succeeded < limit:
+            self.logger.warning(
+                "목표 %d개 중 %d개만 확보(후보 %d개 소진). "
+                "--overfetch를 늘리거나 필터를 완화하세요.",
+                limit, succeeded, len(urls),
+            )
         return BatchResult(
             identifier=identifier,
             platform=adapter.platform,
-            total=len(urls),
+            total=len(items),
             succeeded=succeeded,
-            failed=len(items) - succeeded,
+            failed=failed,
+            skipped=skipped,
             items=items,
         )
 
@@ -179,6 +224,27 @@ def _build_arg_parser():
     parser.add_argument("--min-delay", type=float, default=3.0, help="항목 간 최소 지연(초)")
     parser.add_argument("--max-delay", type=float, default=7.0, help="항목 간 최대 지연(초)")
     parser.add_argument("--retries", type=int, default=3, help="항목별 재시도 횟수")
+    parser.add_argument(
+        "--max-duration", type=int, default=None,
+        help="이 길이(초)를 넘는 항목은 건너뜀 (예: 1200=20분). 긴 무한반복/롱믹스 제외용",
+    )
+    parser.add_argument(
+        "--min-duration", type=int, default=None,
+        help="이 길이(초) 미만 항목은 건너뜀",
+    )
+    parser.add_argument(
+        "--exclude-title", default=None,
+        help="제목이 이 정규식에 매칭되면 건너뜀 (대소문자 무시). "
+             "예: '무한반복|loop|[0-9]+\\s*시간|수면|asmr'",
+    )
+    parser.add_argument(
+        "--archive", default=None,
+        help="다운로드 아카이브 파일 경로. 이미 받은 항목은 다음 실행 때 건너뜀(중복 방지)",
+    )
+    parser.add_argument(
+        "--overfetch", type=int, default=5,
+        help="목표(-n) 대비 후보 수집 배수 (필터/중복 대비 백필용, 기본 5)",
+    )
     parser.add_argument("--crawl-only", action="store_true", help="다운로드 없이 URL 목록만 출력")
     return parser
 
@@ -213,6 +279,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         max_delay=args.max_delay,
         cookies_from_browser=args.cookies_from_browser,
         item_retries=args.retries,
+        max_duration=args.max_duration,
+        min_duration=args.min_duration,
+        exclude_title=args.exclude_title,
+        archive=args.archive,
+        overfetch=args.overfetch,
     )
     result = ingestor.ingest(identifier, args.output, limit=args.limit)
     print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
