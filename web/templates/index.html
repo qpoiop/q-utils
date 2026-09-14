@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>HTML & URL to PDF</title>
+    <title>q-utils · PDF & 미디어 추출</title>
     <link rel="stylesheet" href="/static/style.css" />
   </head>
   <body>
@@ -35,7 +35,29 @@
 		</div>
 	  </div>
 	</div>
-  
+
+	<!-- 섹션 2: 미디어 추출 (SSE 실시간 진행상황) -->
+	<section class="section">
+		<div class="panel">
+			<div class="row">
+				<div class="title">미디어 추출 (오디오 / 비디오)</div>
+				<input type="text" id="mediaUrl" placeholder="미디어 스트림 URL 입력 (예: .m3u8, 동영상 페이지)" />
+				<div class="media-controls">
+					<label><input type="radio" name="mtype" value="video" checked /> 비디오(MP4)</label>
+					<label><input type="radio" name="mtype" value="audio" /> 오디오(MP3)</label>
+					<button type="button" id="mediaStartBtn" onclick="startMedia()">추출 시작</button>
+				</div>
+
+				<div id="mediaProgressWrap" class="progress-wrap" style="display:none">
+					<div class="progress-bar"><div id="mediaProgressFill" class="progress-fill"></div></div>
+					<div id="mediaStatus" class="media-status">대기 중…</div>
+					<pre id="mediaLog" class="media-log"></pre>
+					<a id="mediaDownload" class="media-download" style="display:none">다운로드</a>
+				</div>
+			</div>
+		</div>
+	</section>
+
 	<script src="/static/script.js"></script>
   </body>
   

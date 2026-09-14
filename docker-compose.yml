@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   q-utils:
     container_name: q-utils

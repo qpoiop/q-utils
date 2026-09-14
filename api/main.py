@@ -1,8 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api.html_to_pdf.routes import router as pdf_router
 
-app = FastAPI()
+from api.registry import available_modules, register_features
+
+app = FastAPI(title="q-utils API")
 
 # CORS 설정 (필요하면 특정 도메인만 허용 가능)
 app.add_middleware(
@@ -13,9 +14,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# HTML → PDF 변환 API 등록
-app.include_router(pdf_router, prefix="/api")
+# 활성 기능 모듈을 /api 접두사로 선택적 등록
+ENABLED_MODULES = register_features(app, prefix="/api")
+
 
 @app.get("/")
 async def root():
-    return {"message": "Q-Utils API is running"}
+    return {
+        "message": "Q-Utils API is running",
+        "modules": {"enabled": ENABLED_MODULES, "available": available_modules()},
+    }
