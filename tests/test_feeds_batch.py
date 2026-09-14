@@ -10,6 +10,7 @@ from api.media_ingest import (
     MediaProcessingError,
     MediaRequest,
     MediaResult,
+    MediaSkipped,
     normalize_cookies_from_browser,
 )
 from api.media_ingest.feeds import (
@@ -178,14 +179,17 @@ class _FakeAdapter:
 
 
 class _FakePipeline:
-    """지정한 URL은 항상 실패, 나머지는 성공하는 가짜 파이프라인."""
+    """지정한 URL은 실패/건너뜀, 나머지는 성공하는 가짜 파이프라인."""
 
-    def __init__(self, fail_urls=()):
+    def __init__(self, fail_urls=(), skip_urls=()):
         self.fail_urls = set(fail_urls)
+        self.skip_urls = set(skip_urls)
         self.calls = []
 
     def process(self, media_type, request: MediaRequest) -> MediaResult:
         self.calls.append(request.url)
+        if request.url in self.skip_urls:
+            raise MediaSkipped(f"skip {request.url}")
         if request.url in self.fail_urls:
             raise MediaProcessingError(f"fail {request.url}")
         return MediaResult(
@@ -241,6 +245,48 @@ def test_batch_partial_failure(monkeypatch, patch_factory):
     assert failed[0].url == "https://v/2"
     # 실패 항목은 item_retries(2)회 재시도 → v/2가 2번 호출
     assert pipe.calls.count("https://v/2") == 2
+
+
+def test_batch_skipped(monkeypatch, patch_factory):
+    patch_factory(["https://v/1", "https://v/2", "https://v/3"])
+    pipe = _FakePipeline(skip_urls=["https://v/2"])
+    ing = BatchIngestor(pipeline=pipe, media_type="audio", item_retries=3)
+    monkeypatch.setattr(ing, "_random_delay", lambda: None)
+
+    res = ing.ingest("https://youtube.com/@x", "/tmp/out")
+    assert res.total == 3
+    assert res.succeeded == 2
+    assert res.skipped == 1
+    assert res.failed == 0
+    # 건너뜀은 재시도하지 않음 → v/2는 한 번만 호출
+    assert pipe.calls.count("https://v/2") == 1
+
+
+def test_batch_duration_options():
+    ing = BatchIngestor(max_duration=1200, min_duration=30, exclude_title="무한반복|loop")
+    opts = ing._request_options()
+    assert opts["max_duration"] == 1200
+    assert opts["min_duration"] == 30
+    assert opts["exclude_title"] == "무한반복|loop"
+
+
+def test_batch_archive_option():
+    ing = BatchIngestor(archive="/data/archive.txt")
+    assert ing._request_options()["download_archive"] == "/data/archive.txt"
+
+
+def test_batch_backfill_to_target(monkeypatch, patch_factory):
+    """건너뛴 항목은 목표에 안 세고, 다음 후보로 백필해 목표 성공 개수를 채운다."""
+    patch_factory([f"https://v/{i}" for i in range(1, 6)])  # 후보 5개
+    pipe = _FakePipeline(skip_urls=["https://v/1", "https://v/2"])
+    ing = BatchIngestor(pipeline=pipe, media_type="audio", overfetch=5)
+    monkeypatch.setattr(ing, "_random_delay", lambda: None)
+
+    res = ing.ingest("https://youtube.com/@x", "/tmp", limit=2)
+    assert res.succeeded == 2
+    assert res.skipped == 2
+    # v/1,v/2 건너뜀 → v/3,v/4 성공(목표 2 달성) → v/5 는 처리 안 함
+    assert pipe.calls == ["https://v/1", "https://v/2", "https://v/3", "https://v/4"]
 
 
 def test_batch_request_options():
