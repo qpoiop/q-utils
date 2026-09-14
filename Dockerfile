@@ -1,12 +1,26 @@
-FROM python:3.10
+FROM python:3.10-bookworm
 
-# 필수 패키지 및 한글 폰트 설치
+# ffmpeg(미디어) · 한글 폰트 · wkhtmltopdf 의존 라이브러리 설치
 RUN apt-get update && apt-get install -y \
-    wkhtmltopdf \
+    ffmpeg \
     fonts-nanum \
     fonts-noto-cjk \
     fontconfig \
+    xfonts-75dpi \
+    xfonts-base \
+    wget \
     && rm -rf /var/lib/apt/lists/*
+
+# wkhtmltopdf: 데비안 저장소에서 제거되어 공식 릴리스 .deb(patched-qt)로 설치
+ARG WKHTMLTOPDF_VERSION=0.12.6.1-3
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    wget -O /tmp/wkhtmltox.deb \
+      "https://github.com/wkhtmltopdf/packaging/releases/download/${WKHTMLTOPDF_VERSION}/wkhtmltox_${WKHTMLTOPDF_VERSION}.bookworm_${arch}.deb"; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends /tmp/wkhtmltox.deb; \
+    rm -rf /tmp/wkhtmltox.deb /var/lib/apt/lists/*; \
+    wkhtmltopdf --version
 
 # 폰트 캐시 갱신 (설치된 폰트를 시스템에서 인식하도록)
 RUN fc-cache -fv

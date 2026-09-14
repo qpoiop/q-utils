@@ -1,8 +1,9 @@
-version: "3.8"
-
 services:
   q-utils:
     volumes:
-      - .:/app                
+      - .:/app
     # 로컬 소스를 컨테이너 /app에 실시간 반영
     command: uvicorn web.app:app --host 0.0.0.0 --port 8000 --reload
+    # 활성화할 모듈 선택 (미설정 시 전체). 예: 미디어만 개발
+    # environment:
+    #   - Q_UTILS_MODULES=media_ingest
